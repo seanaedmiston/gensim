@@ -74,6 +74,9 @@ except ImportError:
 from numpy import exp, dot, zeros, outer, random, dtype, get_include, float32 as REAL,\
     uint32, seterr, array, uint8, vstack, argsort, fromstring, sqrt, newaxis, ndarray, empty, sum as np_sum
 
+from numpy.linalg import norm
+import math
+
 logger = logging.getLogger("gensim.models.word2vec")
 
 
@@ -574,6 +577,57 @@ class Word2Vec(utils.SaveLoad):
         return result
 
 
+    def most_similar_sx(self, vector=[], exclude=[], ix=[], topn=10):
+        """
+        Find the top-N most similar words.
+
+        This method computes manhatten similarity using only a subset of the elements
+        of the word vectors - given by ix. Also can exclude words from returned list.
+
+        Example::
+
+          >>> trained_model.most_similar(vector=trained_model['woman'], ix=numpy.array([0,1,2]))
+          [('queen', 0.50882536), ...]
+
+        """
+        self.init_sims()
+        all_words = [self.vocab[word].index for word in exclude]
+
+        dists = np_sum(abs(self.syn0norm[:,ix]-vector[ix]),axis=1)/len(ix)
+        if not topn:
+            return dists
+        best = argsort(dists)[::-1][:topn + len(all_words)]
+        # ignore (don't return) words from the input
+        result = [(self.index2word[sim], float(dists[sim])) for sim in best if sim not in all_words]
+        return result[:topn]
+
+    def most_similar_ix(self, vector=[], exclude=[], ix=[], topn=10):
+        """
+        Find the top-N most similar words.
+
+        This method computes cosine similarity using only a subset of the elements
+        of the word vectors - given by ix. Also can exclude words from returned list.
+
+        Example::
+
+          >>> trained_model.most_similar(vector=trained_model['woman'], ix=numpy.array([0,1,2]))
+          [('queen', 0.50882536), ...]
+
+        """
+        self.init_sims()
+        all_words = [self.vocab[word].index for word in exclude]
+
+        dists = dot(self.syn0norm[:,ix], vector[ix].T)/norm(vector[ix])
+        norms = norm(self.syn0norm[:,ix],axis=1)
+        dists /= norms
+        if not topn:
+            return dists
+        best = argsort(dists)[::-1][:topn + len(all_words)]
+        # ignore (don't return) words from the input
+        result = [(self.index2word[sim], float(dists[sim])) for sim in best if sim not in all_words]
+        return result[:topn]
+
+
     def most_similar(self, positive=[], negative=[], topn=10):
         """
         Find the top-N most similar words. Positive words contribute positively towards the
@@ -622,6 +676,44 @@ class Word2Vec(utils.SaveLoad):
         # ignore (don't return) words from the input
         result = [(self.index2word[sim], float(dists[sim])) for sim in best if sim not in all_words]
         return result[:topn]
+
+
+    def reorg(self, a,b,c, topn=10):
+        """
+        Reorganizes elements of c in the same way that elements of a are rearranged
+        to generate b
+        """
+
+        x1 = sorted(zip(sorted([(x,y) for x,y in enumerate(b)],key=lambda elem:elem[1]),sorted(zip(a,c),key=lambda elem:elem[0])) ,key=lambda elem : elem[0][0])
+
+        return [array([ x[1][1] for x in x1])]
+
+
+    def transform2(self,a,b,c, eps=.08):
+        result = deepcopy(c)
+        for i,z in enumerate(zip(a,b,c)):
+            #if abs(z[1]) < eps:  #if b is small then a-b relationship not meaningful
+            #    result[i] = z[2]
+            #elif abs(z[0]) < eps:
+            #    result[i] = z[1] + z[2]
+            #else:
+            #    result[i] = z[1] - z[0] + z[2]
+
+            if abs(z[1]-z[0])>eps:
+                result[i] = z[1]
+            #else:
+            #    result[i] = (z[1] - z[0] ) + abs(z[2] * z[0])/abs(z[2] * z[0]) * z[2]
+
+            #if abs(z[0]) < eps and abs(z[1]) > eps:
+            #    if abs(z[2])<eps:
+            #        result[i] = z[1]
+            #if abs(z[0]) > eps and abs(z[1]) < eps:
+            #    if abs(z[2]) > eps and (z[0] * z[1]) > 0:
+            #        result[i] = z[1]
+            #if abs(z[0]) > eps and abs (z[1]) > eps and (z[0] * z[1]) > 0:
+            #    if abs(z[2]) > eps:
+            #        result[i] = -z[2]
+        return result
 
 
     def doesnt_match(self, words):
@@ -737,7 +829,7 @@ class Word2Vec(utils.SaveLoad):
                 if section:
                     sections.append(section)
                     log_accuracy(section)
-                section = {'section': line.lstrip(': ').strip(), 'correct': 0, 'incorrect': 0}
+                section = {'section': line.lstrip(': ').strip(), 'correct': 0, 'incorrect': 0, 'bminusa':zeros(300), 'dminusc':zeros(300), 'pminusc':zeros(300), 'count': 0}
             else:
                 if not section:
                     raise ValueError("missing section header before line #%i in %s" % (line_no, questions))
@@ -752,9 +844,13 @@ class Word2Vec(utils.SaveLoad):
                 ignore = set(self.vocab[v].index for v in [a, b, c])  # indexes of words to ignore
                 predicted = None
                 # find the most likely prediction, ignoring OOV words and input words
-                for index in argsort(self.most_similar(positive=[b, c], negative=[a], topn=False))[::-1]:
+                for index in argsort(self.most_similar(positive=[self.transform2(self[a],self[b],self[c])], negative=[], topn=False))[::-1]:
                     if index in ok_index and index not in ignore:
                         predicted = self.index2word[index]
+                        section['bminusa'] += self[b]-self[a]
+                        section['dminusc'] += self[expected]-self[c]
+                        section['pminusc'] += self[predicted]-self[c]
+                        section['count'] += 1
                         if predicted != expected:
                             logger.debug("%s: expected %s, predicted %s" % (line.strip(), expected, predicted))
                         break
