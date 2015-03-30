@@ -72,7 +72,8 @@ except ImportError:
     from Queue import Queue
 
 from numpy import exp, dot, zeros, outer, random, dtype, get_include, float32 as REAL,\
-    uint32, seterr, array, uint8, vstack, argsort, fromstring, sqrt, newaxis, ndarray, empty, sum as np_sum
+    uint32, seterr, array, uint8, vstack, argsort, fromstring, sqrt, newaxis, ndarray, empty, sum as np_sum,\
+    prod, fabs, select, where, average
 
 from numpy.linalg import norm
 import math
@@ -86,6 +87,7 @@ from six.moves import xrange
 
 
 try:
+    raise ImportError  # ignore for now
     from gensim_addons.models.word2vec_inner import train_sentence_sg, train_sentence_cbow, FAST_VERSION
 except ImportError:
     try:
@@ -559,7 +561,7 @@ class Word2Vec(utils.SaveLoad):
                     result.syn0[line_no] = fromstring(fin.read(binary_len), dtype=REAL)
             else:
                 for line_no, line in enumerate(fin):
-                    parts = line.split()
+                    parts = utils.to_unicode(line).split()
                     if len(parts) != layer1_size + 1:
                         raise ValueError("invalid vector on line %s (is this really the text format?)" % (line_no))
                     word, weights = parts[0], map(REAL, parts[1:])
@@ -628,6 +630,153 @@ class Word2Vec(utils.SaveLoad):
         return result[:topn]
 
 
+    def most_similar_hyb(self, positive=[], negative=[], topn=10):
+        """
+        Find the top-N most similar words. Positive words contribute positively towards the
+        similarity, negative words negatively.
+
+        This method computes cosine similarity between a simple mean of the projection
+        weight vectors of the given words, and corresponds to the `word-analogy` and
+        `distance` scripts in the original word2vec implementation.
+
+        Example::
+
+          >>> trained_model.most_similar(positive=['woman', 'king'], negative=['man'])
+          [('queen', 0.50882536), ...]
+
+        """
+        self.init_sims()
+
+        if isinstance(positive, string_types) and not negative:
+            # allow calls like most_similar('dog'), as a shorthand for most_similar(['dog'])
+            positive = [positive]
+
+        #some setup
+        step = 100
+        # vec=self.transform2(self[negative[0]],self[positive[1]],self[positive[0]])
+        vec_c = self[positive[1]]
+        vec_b = self[positive[0]]
+        vec_a = self[negative[0]]
+        vec=select([(vec_a*vec_b>0) & (vec_b*vec_c>0),True],[vec_b,vec_c])
+        
+        # last 'positive' entry is special - remember it
+        prime = self[positive[1]]
+        idx = argsort(prime)
+        ix=idx[0:0+step]
+        zz=np_sum(fabs(vec[ix]-self.syn0norm[:,ix]),axis=1).argsort().argsort()
+        
+        for pos in xrange(step,self.syn0norm.shape[1],step):
+            ix=idx[pos:pos+step]
+            yy=np_sum(fabs(vec[ix]-self.syn0norm[:,ix]),axis=1).argsort().argsort()
+            zz=vstack((yy,zz))
+        
+        dists=(zz.T[:,2]+zz.T[:,0])
+        #[(self.index2word[x],zz.T[x]) for x in argsort(zz.T[:,2]+zz.T[:,0])[::1][:20]]
+        
+        # add weights for each word, if not already present; default to 1.0 for positive and -1.0 for negative words
+        # positive = [(word, 1.0) if isinstance(word, string_types + (ndarray,))
+        #                         else word for word in positive]
+        # negative = [(word, -1.0) if isinstance(word, string_types + (ndarray,))
+        #                          else word for word in negative]
+
+        # # check all words
+        all_words = set()
+        for word in positive + negative:
+        #     if isinstance(word, ndarray):
+        #         mean.append(weight * word)
+            if word in self.vocab:
+        #         mean.append(weight * self.syn0norm[self.vocab[word].index])
+                all_words.add(self.vocab[word].index)
+            else:
+                raise KeyError("word '%s' not in vocabulary" % word)
+        # if not mean:
+        #     raise ValueError("cannot compute similarity with no input")
+        # mean = matutils.unitvec(array(mean).mean(axis=0)).astype(REAL)
+
+        # dists = dot(self.syn0norm, mean)
+        
+        if not topn:
+            return dists
+        best = argsort(dists)[:topn + len(all_words)]
+        # ignore (don't return) words from the input
+        result = [(self.index2word[sim], float(dists[sim])) for sim in best if sim not in all_words]
+        return result[:topn]
+
+    def most_similar_intuit(self, positive=[], negative=[], topn=10):
+        """
+        Find the top-N most similar words. Positive words contribute positively towards the
+        similarity, negative words negatively.
+
+        This method computes cosine similarity between a simple mean of the projection
+        weight vectors of the given words, and corresponds to the `word-analogy` and
+        `distance` scripts in the original word2vec implementation.
+
+        Example::
+
+          >>> trained_model.most_similar(positive=['woman', 'king'], negative=['man'])
+          [('queen', 0.50882536), ...]
+
+        """
+
+
+        self.init_sims()
+
+        # if isinstance(positive, string_types) and not negative:
+        #     # allow calls like most_similar('dog'), as a shorthand for most_similar(['dog'])
+        #     positive = [positive]
+
+        vec_c = self[positive[1]]
+        vec_b = self[positive[0]]
+        vec_a = self[negative[0]]
+        # add weights for each word, if not already present; default to 1.0 for positive and -1.0 for negative words
+        positive = [(word, 1.0) if isinstance(word, string_types + (ndarray,))
+                                else word for word in positive]
+        negative = [(word, -1.0) if isinstance(word, string_types + (ndarray,))
+                                 else word for word in negative]
+        # eps=0
+        # cond1=((vec_a*vec_b<-eps) & (vec_a*vec_c>eps))
+        # cond2=((vec_a*vec_b<-eps) & (vec_a*vec_c<-eps))
+        # cond3=((vec_a*vec_b>eps) & (vec_a*vec_c>eps))
+        # cond4=((vec_a*vec_b>eps) & (vec_a*vec_c<-eps))
+        # mean=select([cond1,cond2,cond3,cond4,True],[vec_c+vec_b,0,vec_c-vec_a,vec_c+vec_b-vec_a,vec_c+vec_b-vec_a]) 
+        # mean=select([(vec_a*vec_b>0) & (vec_b*vec_c>0),True],[vec_b,vec_c])
+        # cond1=(abs(vec_b-vec_a)>0.08)
+        # cond2=((vec_b*vec_a)<0)
+        # cond1=abs(vec_b-vec_a)>abs(vec_c-vec_a)
+        # cond1a=(cond1&(abs(vec_c)<0.010))
+        # cond1b=(cond1&(vec_a>0)&(vec_b<0)&(vec_c>0))
+        # condx=abs(vec_a)<0.01
+        # cond2=((vec_a*vec_b<0) & (vec_a*vec_c>0))
+        # cond3=((vec_a*vec_b<0) & (vec_a*vec_c<0))
+        # cond1 = (vec_b-vec_a)>0.08
+        cond1 = (vec_a<0)&(vec_b<0)&(vec_c<0)&(vec_b<vec_a)
+        cond2 = (vec_a>0)&(vec_b>0)&(vec_c<0)&(vec_b<vec_a)
+        cond3 = (vec_a<0)&(vec_b<0)&(vec_c>0)&(vec_b>vec_a)
+        cond4 = (vec_a>0)&(vec_b>0)&(vec_c>0)&(vec_b>vec_a)
+        cond5 = (vec_a<0)&(vec_b>0)&(vec_c>0)&(vec_b>vec_a)
+        cond6 = (vec_a>0)&(vec_b<0)&(vec_c<0)&(vec_b<vec_a)
+        mean=select([cond1,cond2,cond3,cond4,cond5,cond6,True],[vec_c,vec_c,vec_c,vec_c,vec_c,vec_c,vec_c+(vec_b-vec_a)])
+        # mean=mean/(0.0005+vec_c**2)
+
+        # compute the weighted average of all words
+        all_words = set()
+        for word, weight in positive + negative:
+            if not isinstance(word, ndarray) and word in self.vocab:
+                all_words.add(self.vocab[word].index)
+            else:
+                raise KeyError("word '%s' not in vocabulary" % word)
+        #mean = [self.syn0norm[self.vocab[word].index]]
+        #mean = matutils.unitvec(array(mean).mean(axis=0)).astype(REAL)
+
+        dists = dot(self.syn0norm, mean)
+        if not topn:
+            return dists
+        best = argsort(dists)[::-1][:topn + len(all_words)]
+        # ignore (don't return) words from the input
+        result = [(self.index2word[sim], float(dists[sim])) for sim in best if sim not in all_words]
+        return result[:topn]
+
+
     def most_similar(self, positive=[], negative=[], topn=10):
         """
         Find the top-N most similar words. Positive words contribute positively towards the
@@ -677,6 +826,62 @@ class Word2Vec(utils.SaveLoad):
         result = [(self.index2word[sim], float(dists[sim])) for sim in best if sim not in all_words]
         return result[:topn]
 
+    def most_similar_cosmul(self, positive=[], negative=[], topn=10):
+        """
+        Find the top-N most similar words, using the multiplicative combination objective 
+        proposed by Omer Levy and Yoav Goldberg in [1]_. Positive words still contribute 
+        positively towards the similarity, negative words negatively, but with less 
+        susceptibility to one large distance dominating the calculation.
+
+        In the common analogy-solving case, of two positive and one negative examples, 
+        this method is equivalent to the "3CosMul" objective (equation (4)) of Levy and Goldberg.
+
+        Additional positive or negative examples contribute to the numerator or denominator,
+        respectively – a potentially sensible but untested extension of the method. (With 
+        a single positive example, rankings will be the same as in the default most_similar.)
+
+        Example::
+
+          >>> trained_model.most_similar_cosmul(positive=['baghdad','england'],negative=['london'])
+          [(u'iraq', 0.8488819003105164), ...]
+
+        .. [1] Omer Levy and Yoav Goldberg. Linguistic Regularities in Sparse and Explicit Word Representations, 2014.
+        """
+        self.init_sims()
+
+        if isinstance(positive, string_types) and not negative:
+            # allow calls like most_similar_cosmul('dog'), as a shorthand for most_similar_cosmul(['dog'])
+            positive = [positive]
+
+        all_words = set()
+
+        def word_vec(word):
+            if isinstance(word, ndarray):
+                return word
+            elif word in self.vocab:
+                all_words.add(self.vocab[word].index)
+                return self.syn0norm[self.vocab[word].index]
+            else:
+                raise KeyError("word '%s' not in vocabulary" % word)
+
+        positive = [word_vec(word) for word in positive]
+        negative = [word_vec(word) for word in negative]
+        if not positive:
+            raise ValueError("cannot compute similarity with no input")
+
+        # equation (4) of Levy & Goldberg "Linguistic Regularities...",
+        # with distances shifted to [0,1] per footnote (7)
+        pos_dists = [((1 + dot(self.syn0norm, term)) / 2) for term in positive]
+        neg_dists = [((1 + dot(self.syn0norm, term)) / 2) for term in negative]
+        dists = prod(pos_dists, axis=0) / (prod(neg_dists, axis=0) + 0.000001)
+
+        if not topn:
+            return dists
+        best = argsort(dists)[::-1][:topn + len(all_words)]
+        # ignore (don't return) words from the input
+        result = [(self.index2word[sim], float(dists[sim])) for sim in best if sim not in all_words]
+        return result[:topn]
+
 
     def reorg(self, a,b,c, topn=10):
         """
@@ -689,30 +894,50 @@ class Word2Vec(utils.SaveLoad):
         return [array([ x[1][1] for x in x1])]
 
 
-    def transform2(self,a,b,c, eps=.08):
-        result = deepcopy(c)
+    # def transform2(self,a,b,c, eps=.08):
+    #     result = deepcopy(c)
+    #     for i,z in enumerate(zip(a,b,c)):
+    #         #if abs(z[1]) < eps:  #if b is small then a-b relationship not meaningful
+    #         #    result[i] = z[2]
+    #         #elif abs(z[0]) < eps:
+    #         #    result[i] = z[1] + z[2]
+    #         #else:
+    #         #    result[i] = z[1] - z[0] + z[2]
+
+    #         if abs(z[1]-z[0])>eps:
+    #             result[i] = z[1]
+    #         #else:
+    #         #    result[i] = (z[1] - z[0] ) + abs(z[2] * z[0])/abs(z[2] * z[0]) * z[2]
+
+    #         #if abs(z[0]) < eps and abs(z[1]) > eps:
+    #         #    if abs(z[2])<eps:
+    #         #        result[i] = z[1]
+    #         #if abs(z[0]) > eps and abs(z[1]) < eps:
+    #         #    if abs(z[2]) > eps and (z[0] * z[1]) > 0:
+    #         #        result[i] = z[1]
+    #         #if abs(z[0]) > eps and abs (z[1]) > eps and (z[0] * z[1]) > 0:
+    #         #    if abs(z[2]) > eps:
+    #         #        result[i] = -z[2]
+    #     return result
+
+
+    def transform2(self,a,b,c,eps=0):
+        result=zeros(len(c),)
         for i,z in enumerate(zip(a,b,c)):
-            #if abs(z[1]) < eps:  #if b is small then a-b relationship not meaningful
-            #    result[i] = z[2]
-            #elif abs(z[0]) < eps:
-            #    result[i] = z[1] + z[2]
-            #else:
-            #    result[i] = z[1] - z[0] + z[2]
-
-            if abs(z[1]-z[0])>eps:
-                result[i] = z[1]
-            #else:
-            #    result[i] = (z[1] - z[0] ) + abs(z[2] * z[0])/abs(z[2] * z[0]) * z[2]
-
-            #if abs(z[0]) < eps and abs(z[1]) > eps:
-            #    if abs(z[2])<eps:
-            #        result[i] = z[1]
-            #if abs(z[0]) > eps and abs(z[1]) < eps:
-            #    if abs(z[2]) > eps and (z[0] * z[1]) > 0:
-            #        result[i] = z[1]
-            #if abs(z[0]) > eps and abs (z[1]) > eps and (z[0] * z[1]) > 0:
-            #    if abs(z[2]) > eps:
-            #        result[i] = -z[2]
+            if (z[0]<0 and z[1]>0 and z[2]>0):
+                result[i]=z[2]-(z[1]-z[0])
+            elif (z[0]<0 and z[1]<0 and z[2]>0):
+                if ((z[1]-z[0])/z[1]>-1):
+                    result[i]=z[2]+(z[1]-z[0])
+                else:
+                    result[i]=z[2]-(z[1]-z[0])
+            elif (z[0]<0 and z[1]<0 and z[2]<0):
+                if ((z[1]-z[0])>0):
+                    result[i]=z[2]+(z[1]-z[0])
+                else:
+                    result[i]=z[2]-(z[1]-z[0])
+            else:
+                result[i]=z[2]+(z[1]-z[0])
         return result
 
 
@@ -771,6 +996,27 @@ class Word2Vec(utils.SaveLoad):
         return dot(matutils.unitvec(self[w1]), matutils.unitvec(self[w2]))
 
 
+    def n_similarity(self, ws1, ws2):
+        """
+        Compute cosine similarity between two sets of words.
+
+        Example::
+
+          >>> trained_model.n_similarity(['sushi', 'shop'], ['japanese', 'restaurant'])
+          0.61540466561049689
+
+          >>> trained_model.n_similarity(['restaurant', 'japanese'], ['japanese', 'restaurant'])
+          1.0000000000000004
+
+          >>> trained_model.n_similarity(['sushi'], ['restaurant']) == trained_model.similarity('sushi', 'restaurant')
+          True
+
+        """
+        v1 = [self[word] for word in ws1]
+        v2 = [self[word] for word in ws2]
+        return dot(matutils.unitvec(array(v1).mean(axis=0)), matutils.unitvec(array(v2).mean(axis=0)))
+
+
     def init_sims(self, replace=False):
         """
         Precompute L2-normalized vectors.
@@ -790,6 +1036,8 @@ class Word2Vec(utils.SaveLoad):
                 self.syn0norm = self.syn0
                 if hasattr(self, 'syn1'):
                     del self.syn1
+                logger.info("normalising vector offsets")
+                self.syn0norm-=average(self.syn0norm,axis=0)
             else:
                 self.syn0norm = (self.syn0 / sqrt((self.syn0 ** 2).sum(-1))[..., newaxis]).astype(REAL)
 
@@ -844,7 +1092,7 @@ class Word2Vec(utils.SaveLoad):
                 ignore = set(self.vocab[v].index for v in [a, b, c])  # indexes of words to ignore
                 predicted = None
                 # find the most likely prediction, ignoring OOV words and input words
-                for index in argsort(self.most_similar(positive=[self.transform2(self[a],self[b],self[c])], negative=[], topn=False))[::-1]:
+                for index in argsort(self.most_similar_intuit(positive=[b,c], negative=[a], topn=False))[::-1]:
                     if index in ok_index and index not in ignore:
                         predicted = self.index2word[index]
                         section['bminusa'] += self[b]-self[a]
