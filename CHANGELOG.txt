@@ -1,11 +1,60 @@
 Changes
 =======
 
-0.9.2
+0.10.4
 
+* make utils.decode_htmlentities more robust and reliable on narrow Python builds
+* Move wrappers for external modeling programs into a submodule (Christopher Corley, #295)
+
+0.10.3, 17/11/2014
+
+* added streamed phrases = collocation detection (Miguel Cabrera, #258)
+* added param for multiple word2vec epochs (sebastienj, #243)
+* added doc2vec (=paragraph2vec = extension of word2vec) model (Timothy Emerick, #231)
+* initialize word2vec deterministically, for increased experiment reproducibility (KCzar, #240)
+* all indexed corpora now allow full Python slicing syntax (Christopher Corley, #246)
+* update distributed code for new Pyro4 API and py3k (Michael Brooks, Marco Bonzanini, #255, #249)
+* fixes to six module version (Lars Buitinck, #259)
+* fixes to setup.py (Maxim Avanov and Christopher Corley, #260, #251)
+* ...and lots of minor fixes & updates all around
+
+0.10.2, 18/09/2014
+
+* new parallelized, LdaMulticore implementation (Jan Zikes, #232)
+* Dynamic Topic Models (DTM) wrapper (Arttii, #205)
+* word2vec compiled from bundled C file at install time: no more pyximport (#233)
+* standardize show_/print_topics in LdaMallet (Benjamin Bray, #223)
+* add new word2vec multiplicative objective (3CosMul) of Levy & Goldberg (Gordon Mohr, #224)
+* preserve case in MALLET wrapper (mcburton, #222)
+* support for matrix-valued topic/word prior eta in LdaModel (mjwillson, #208)
+* py3k fix to SparseCorpus (Andreas Madsen, #234)
+* fix to LowCorpus when switching dictionaries (Christopher Corley, #237)
+
+0.10.1, 22/07/2014
+
+* word2vec: new n_similarity method for comparing two sets of words (François Scharffe, #219)
+* make LDA print/show topics parameters consistent with LSI (Bram Vandekerckhove, #201)
+* add option for efficient word2vec subsampling (Gordon Mohr, #206)
+* fix length calculation for corpora on empty files (Christopher Corley, #209)
+* improve file cleanup of unit tests (Christopher Corley)
+* more unit tests
+* unicode now stored everywhere in gensim internally; accepted input stays either utf8 or unicode
+* various fixes to the py3k ported code
+* allow any dict-like input in Dictionary.from_corpus (Andreas Madsen)
+* error checking improvements to the MALLET wrapper
+* ignore non-articles during wiki parsig
+* utils.lemmatize now (optionally) ignores stopwords
+
+0.10.0 (aka "PY3K port"), 04/06/2014
+
+* full Python 3 support (targeting 3.3+, #196)
+* all internal methods now expect & store unicode, instead of utf8
+* new optimized word2vec functionality: negative sampling, cbow (sebastien-j, #162)
 * allow by-frequency sort in Dictionary.save_as_text (Renaud Richardet, #192)
 * add topic printing to HDP model (Tiepes, #190)
-* build an optional gensim_addons-package, if Cython is present during installation (Björn Esser, #197)
+* new gensim_addons package = optional install-time Cython compilations (Björn Esser, #197)
+* added py3.3 and 3.4 to Travis CI tests
+* fix a cbow word2vec bug (Liang-Chi Hsieh)
 
 0.9.1, 12/04/2014
 
